@@ -9,11 +9,14 @@ def install(package):
 try:
     import pandas as pd
     import requests
+    import plotly.express as px
 except ImportError:
     install('pandas')
     install('requests')
+    install('plotly')
     import pandas as pd
     import requests
+    import plotly.express as px
 
 from datetime import datetime, timedelta
 
@@ -21,7 +24,6 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Roblox Analytics", layout="wide")
 st.title("🚀 Roblox Sales Pro Dashboard")
 
-# Sidebar
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
 uploaded_file = st.file_uploader("Upload 'Sale of Goods' CSV", type=["csv"])
 
@@ -30,7 +32,6 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
-        # Column Mapping
         date_col = next((c for c in ['Date and Time', 'Sale Date and Time', 'Created'] if c in df.columns), None)
         rev_col = next((c for c in ['Revenue', 'Net Revenue'] if c in df.columns), None)
         item_col = next((c for c in ['Asset Name', 'Item'] if c in df.columns), None)
@@ -51,13 +52,26 @@ if uploaded_file is not None:
             c2.metric("7 Days", f"R$ {int(w_sum):,}")
             c3.metric("30 Days", f"R$ {int(m_sum):,}")
 
-            # --- SALES CHART ---
+            # --- LOCKED SALES CHART (PLOTLY) ---
             st.divider()
             st.subheader("📈 Revenue Trend (Last 30 Days)")
+            
             chart_data = df[df[date_col] >= (now - timedelta(days=30))].copy()
             chart_data['Day'] = chart_data[date_col].dt.date
-            daily_trend = chart_data.groupby('Day')[rev_col].sum()
-            st.line_chart(daily_trend)
+            daily_trend = chart_data.groupby('Day')[rev_col].sum().reset_index()
+
+            fig = px.line(daily_trend, x='Day', y=rev_col, markers=True)
+            
+            # This section locks the chart so you can't scroll or zoom
+            fig.update_layout(
+                xaxis=dict(fixedrange=True), 
+                yaxis=dict(fixedrange=True),
+                dragmode=False,
+                hovermode="x unified"
+            )
+            fig.update_traces(line_color='#00d4ff', line_width=3)
+            
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
             # --- TOP ITEMS TABLE ---
             if item_col:
@@ -68,16 +82,14 @@ if uploaded_file is not None:
                     item_col: 'count'
                 }).rename(columns={item_col: 'Sales Count', rev_col: 'Total Robux'})
                 
-                # Clean up formatting: make Robux an integer
                 top_items['Total Robux'] = top_items['Total Robux'].astype(int)
                 top_items = top_items.sort_values(by='Total Robux', ascending=False)
-                
                 st.table(top_items.head(15).style.format("{:,}"))
             
     except Exception as e:
         st.error(f"Error: {e}")
 
-# Simple Sidebar Counter (Fast)
+# Sidebar Info
 if group_id:
     try:
         r = requests.get(f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2")
