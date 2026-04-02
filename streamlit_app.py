@@ -2,9 +2,12 @@ import os
 import subprocess
 import sys
 
-# --- AUTO-INSTALLER (Replaces the need for requirements.txt) ---
+# --- AUTO-INSTALLER ---
 def install(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    except:
+        pass
 
 try:
     import pandas as pd
@@ -20,7 +23,7 @@ from datetime import datetime, timedelta
 
 # --- Dashboard Configuration ---
 st.set_page_config(page_title="Roblox Group Analytics", layout="wide")
-st.title("📊 Roblox Sales Dashboard (2026)")
+st.title("📊 Roblox Sales Dashboard")
 
 # Sidebar for Group ID
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="")
@@ -33,8 +36,9 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
-        # 2026 Flexible Column Detection
-        date_options = ['Sale Date and Time', 'Created', 'Date']
+        # 2026 Column Detection based on YOUR file
+        # Added 'Date and Time' to the list
+        date_options = ['Date and Time', 'Sale Date and Time', 'Created', 'Date']
         rev_options = ['Revenue', 'Net Revenue', 'Robux']
         item_options = ['Asset Name', 'Item', 'Product']
 
@@ -46,9 +50,11 @@ if uploaded_file is not None:
             st.error(f"Missing required columns! Found: {list(df.columns)}")
             st.stop()
 
+        # Convert date column
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         df = df.dropna(subset=[date_col])
 
+        # Time calculations
         now = datetime.now(df[date_col].dt.tz)
         day_ago = now - timedelta(days=1)
         week_ago = now - timedelta(days=7)
@@ -57,15 +63,23 @@ if uploaded_file is not None:
         # Show Metrics
         st.subheader("💰 Earnings Summary")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Past 24 Hours", f"R$ {int(df[df[date_col] >= day_ago][rev_col].sum()):,}")
-        col2.metric("Past 7 Days", f"R$ {int(df[df[date_col] >= week_ago][rev_col].sum()):,}")
-        col3.metric("Past 30 Days", f"R$ {int(df[df[date_col] >= month_ago][rev_col].sum()):,}")
+        
+        d_sum = df[df[date_col] >= day_ago][rev_col].sum()
+        w_sum = df[df[date_col] >= week_ago][rev_col].sum()
+        m_sum = df[df[date_col] >= month_ago][rev_col].sum()
+
+        col1.metric("Past 24 Hours", f"R$ {int(d_sum):,}")
+        col2.metric("Past 7 Days", f"R$ {int(w_sum):,}")
+        col3.metric("Past 30 Days", f"R$ {int(m_sum):,}")
 
         st.divider()
         
         if item_col:
             st.subheader("🏆 Top Selling Items")
-            best_sellers = df.groupby(item_col).agg({rev_col: 'sum', item_col: 'count'}).rename(columns={item_col: 'Sales', rev_col: 'Robux'}).sort_values(by='Sales', ascending=False)
+            best_sellers = df.groupby(item_col).agg({
+                rev_col: 'sum',
+                item_col: 'count'
+            }).rename(columns={item_col: 'Sales', rev_col: 'Total Robux'}).sort_values(by='Sales', ascending=False)
             st.table(best_sellers.head(20))
             
     except Exception as e:
