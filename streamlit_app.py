@@ -1,13 +1,10 @@
-import os
-import subprocess
-import sys
+import os, subprocess, sys
+import streamlit as st
 
 # --- AUTO-INSTALLER ---
 def install(package):
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-    except:
-        pass
+    try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    except: pass
 
 try:
     import pandas as pd
@@ -18,79 +15,71 @@ except ImportError:
     import pandas as pd
     import requests
 
-import streamlit as st
 from datetime import datetime, timedelta
 
-# --- Dashboard Configuration ---
-st.set_page_config(page_title="Roblox Group Analytics", layout="wide")
-st.title("📊 Roblox Sales Dashboard")
+# --- Page Setup ---
+st.set_page_config(page_title="Roblox Analytics", layout="wide")
+st.title("🚀 Roblox Sales Pro Dashboard")
 
-# Sidebar for Group ID
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="")
-
-# --- Step 1: CSV Upload ---
-uploaded_file = st.file_uploader("Upload your 'Sale of Goods' CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload 'Sale of Goods' CSV", type=["csv"])
 
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
-        # 2026 Column Detection based on YOUR file
-        # Added 'Date and Time' to the list
-        date_options = ['Date and Time', 'Sale Date and Time', 'Created', 'Date']
-        rev_options = ['Revenue', 'Net Revenue', 'Robux']
-        item_options = ['Asset Name', 'Item', 'Product']
+        # Column Mapping
+        date_col = next((c for c in ['Date and Time', 'Sale Date and Time', 'Created'] if c in df.columns), None)
+        rev_col = next((c for c in ['Revenue', 'Net Revenue'] if c in df.columns), None)
+        item_col = next((c for c in ['Asset Name', 'Item'] if c in df.columns), None)
 
-        date_col = next((c for c in date_options if c in df.columns), None)
-        rev_col = next((c for c in rev_options if c in df.columns), None)
-        item_col = next((c for c in item_options if c in df.columns), None)
+        if date_col and rev_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df = df.dropna(subset=[date_col])
+            
+            # --- CALCULATE METRICS ---
+            now = datetime.now(df[date_col].dt.tz)
+            d_sum = df[df[date_col] >= (now - timedelta(days=1))][rev_col].sum()
+            w_sum = df[df[date_col] >= (now - timedelta(days=7))][rev_col].sum()
+            m_sum = df[df[date_col] >= (now - timedelta(days=30))][rev_col].sum()
 
-        if not date_col or not rev_col:
-            st.error(f"Missing required columns! Found: {list(df.columns)}")
-            st.stop()
+            st.subheader("💰 Revenue Summary")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("24 Hours", f"R$ {int(d_sum):,}")
+            c2.metric("7 Days", f"R$ {int(w_sum):,}")
+            c3.metric("30 Days", f"R$ {int(m_sum):,}")
 
-        # Convert date column
-        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        df = df.dropna(subset=[date_col])
+            # --- SALES CHART ---
+            st.divider()
+            st.subheader("📈 Revenue Trend (Last 30 Days)")
+            chart_data = df[df[date_col] >= (now - timedelta(days=30))].copy()
+            chart_data['Day'] = chart_data[date_col].dt.date
+            daily_trend = chart_data.groupby('Day')[rev_col].sum()
+            st.line_chart(daily_trend)
 
-        # Time calculations
-        now = datetime.now(df[date_col].dt.tz)
-        day_ago = now - timedelta(days=1)
-        week_ago = now - timedelta(days=7)
-        month_ago = now - timedelta(days=30)
-
-        # Show Metrics
-        st.subheader("💰 Earnings Summary")
-        col1, col2, col3 = st.columns(3)
-        
-        d_sum = df[df[date_col] >= day_ago][rev_col].sum()
-        w_sum = df[df[date_col] >= week_ago][rev_col].sum()
-        m_sum = df[df[date_col] >= month_ago][rev_col].sum()
-
-        col1.metric("Past 24 Hours", f"R$ {int(d_sum):,}")
-        col2.metric("Past 7 Days", f"R$ {int(w_sum):,}")
-        col3.metric("Past 30 Days", f"R$ {int(m_sum):,}")
-
-        st.divider()
-        
-        if item_col:
-            st.subheader("🏆 Top Selling Items")
-            best_sellers = df.groupby(item_col).agg({
-                rev_col: 'sum',
-                item_col: 'count'
-            }).rename(columns={item_col: 'Sales', rev_col: 'Total Robux'}).sort_values(by='Sales', ascending=False)
-            st.table(best_sellers.head(20))
+            # --- TOP ITEMS TABLE ---
+            if item_col:
+                st.divider()
+                st.subheader("🏆 Top Selling Assets")
+                top_items = df.groupby(item_col).agg({
+                    rev_col: 'sum',
+                    item_col: 'count'
+                }).rename(columns={item_col: 'Sales Count', rev_col: 'Total Robux'})
+                
+                # Clean up formatting: make Robux an integer (no decimals)
+                top_items['Total Robux'] = top_items['Total Robux'].astype(int)
+                top_items = top_items.sort_values(by='Total Robux', ascending=False)
+                
+                st.table(top_items.head(15).style.format("{:,}"))
             
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- Step 2: Live Group Info ---
+# Sidebar Info
 if group_id:
-    st.sidebar.markdown("---")
     try:
         r = requests.get(f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2")
         if r.status_code == 200:
-            st.sidebar.success(f"📦 Items for sale: {len(r.json().get('data', []))}")
-    except:
-        pass
+            st.sidebar.success(f"📦 Active Items: {len(r.json().get('data', []))}")
+    except: pass
