@@ -1,7 +1,7 @@
 import os, subprocess, sys
 import streamlit as st
 
-# --- AUTO-INSTALLER (Only the basics) ---
+# --- AUTO-INSTALLER ---
 def install(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
@@ -29,7 +29,7 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
-        # Map columns from your specific CSV
+        # Column Mapping
         date_col = 'Date and Time' if 'Date and Time' in df.columns else 'Created'
         rev_col = 'Revenue' if 'Revenue' in df.columns else 'Net Revenue'
         item_col = 'Asset Name' if 'Asset Name' in df.columns else 'Item'
@@ -38,27 +38,33 @@ if uploaded_file is not None:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.dropna(subset=[date_col])
             
-            # --- TOP METRICS ---
+            # --- DATE CALCULATIONS ---
+            # Using .date() to get full-day accuracy
             now = datetime.now(df[date_col].dt.tz)
-            st.subheader("💰 Revenue Summary")
-            c1, c2, c3 = st.columns(3)
+            today_date = now.date()
+            yesterday_date = today_date - timedelta(days=1)
             
-            d_sum = df[df[date_col] >= (now - timedelta(days=1))][rev_col].sum()
-            w_sum = df[df[date_col] >= (now - timedelta(days=7))][rev_col].sum()
-            m_sum = df[df[date_col] >= (now - timedelta(days=30))][rev_col].sum()
+            # Filter Dataframes
+            df_today = df[df[date_col].dt.date == today_date]
+            df_yesterday = df[df[date_col].dt.date == yesterday_date]
+            df_7d = df[df[date_col] >= (now - timedelta(days=7))]
+            df_31d = df[df[date_col] >= (now - timedelta(days=31))]
 
-            c1.metric("Past 24h", f"R$ {int(d_sum):,}")
-            c2.metric("Past 7d", f"R$ {int(w_sum):,}")
-            c3.metric("Past 30d", f"R$ {int(m_sum):,}")
+            # --- TOP METRICS ---
+            st.subheader("💰 Revenue Summary")
+            c1, c2, c3, c4 = st.columns(4)
+            
+            c1.metric("Today", f"R$ {int(df_today[rev_col].sum()):,}")
+            c2.metric("Yesterday", f"R$ {int(df_yesterday[rev_col].sum()):,}")
+            c3.metric("Past 7 Days", f"R$ {int(df_7d[rev_col].sum()):,}")
+            c4.metric("Past 31 Days", f"R$ {int(df_31d[rev_col].sum()):,}")
 
-            # --- TREND CHART (Static/No-Scroll) ---
+            # --- TREND CHART ---
             st.divider()
-            st.subheader("📈 30-Day Trend")
-            chart_data = df[df[date_col] >= (now - timedelta(days=30))].copy()
+            st.subheader("📈 31-Day Trend")
+            chart_data = df_31d.copy()
             chart_data['Day'] = chart_data[date_col].dt.date
             daily_rev = chart_data.groupby('Day')[rev_col].sum()
-            
-            # Use area_chart (better looking, and we lock it with a simple display)
             st.area_chart(daily_rev)
 
             # --- TOP ITEMS TABLE ---
@@ -69,14 +75,13 @@ if uploaded_file is not None:
                 item_col: 'count'
             }).rename(columns={item_col: 'Sales', rev_col: 'Total Robux'})
             
-            # Clean decimals and format
             top_items['Total Robux'] = top_items['Total Robux'].astype(int)
             top_items = top_items.sort_values(by='Total Robux', ascending=False)
             
             st.table(top_items.head(15).style.format("{:,}"))
             
     except Exception as e:
-        st.error(f"Waiting for tools to install... please refresh in 10 seconds. (Error: {e})")
+        st.error(f"Processing... please refresh in 10s. (Error: {e})")
 
 # Sidebar Info
 if group_id:
@@ -84,5 +89,5 @@ if group_id:
         r = requests.get(f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2")
         if r.status_code == 200:
             count = len(r.json().get('data', []))
-            st.sidebar.success(f"📦 Active Items: {count}")
+            st.sidebar.success(f"📦 Recent Items: {count}")
     except: pass
