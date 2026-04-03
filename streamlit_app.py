@@ -18,10 +18,17 @@ except ImportError:
 from datetime import datetime, timedelta
 
 # --- Page Config ---
-st.set_page_config(page_title="Roblox Analytics", layout="wide")
+st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
 st.title("📊 Roblox Sales Dashboard")
 
+# --- Sidebar ---
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
+
+st.sidebar.divider()
+st.sidebar.subheader("DevEx Settings")
+# Standard DevEx rate is $0.0035 per 1 Robux
+devex_rate = st.sidebar.number_input("Exchange Rate (USD/1 R$)", value=0.0035, format="%.4f")
+
 uploaded_file = st.file_uploader("Upload 'Sale of Goods' CSV", type=["csv"])
 
 if uploaded_file is not None:
@@ -39,7 +46,6 @@ if uploaded_file is not None:
             df = df.dropna(subset=[date_col])
             
             # --- DATE CALCULATIONS ---
-            # Using .date() to get full-day accuracy
             now = datetime.now(df[date_col].dt.tz)
             today_date = now.date()
             yesterday_date = today_date - timedelta(days=1)
@@ -50,14 +56,24 @@ if uploaded_file is not None:
             df_7d = df[df[date_col] >= (now - timedelta(days=7))]
             df_31d = df[df[date_col] >= (now - timedelta(days=31))]
 
-            # --- TOP METRICS ---
+            # --- TOP METRICS WITH DEVEX ---
             st.subheader("💰 Revenue Summary")
             c1, c2, c3, c4 = st.columns(4)
             
-            c1.metric("Today", f"R$ {int(df_today[rev_col].sum()):,}")
-            c2.metric("Yesterday", f"R$ {int(df_yesterday[rev_col].sum()):,}")
-            c3.metric("Past 7 Days", f"R$ {int(df_7d[rev_col].sum()):,}")
-            c4.metric("Past 31 Days", f"R$ {int(df_31d[rev_col].sum()):,}")
+            periods = [
+                ("Today", df_today),
+                ("Yesterday", df_yesterday),
+                ("Past 7 Days", df_7d),
+                ("Past 31 Days", df_31d)
+            ]
+            
+            cols = [c1, c2, c3, c4]
+            
+            for i, (label, data) in enumerate(periods):
+                robux_sum = int(data[rev_col].sum())
+                usd_val = robux_sum * devex_rate
+                cols[i].metric(label, f"R$ {robux_sum:,}")
+                cols[i].write(f"**Est. USD:** ${usd_val:,.2f}")
 
             # --- TREND CHART ---
             st.divider()
@@ -76,12 +92,17 @@ if uploaded_file is not None:
             }).rename(columns={item_col: 'Sales', rev_col: 'Total Robux'})
             
             top_items['Total Robux'] = top_items['Total Robux'].astype(int)
+            top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
             top_items = top_items.sort_values(by='Total Robux', ascending=False)
             
-            st.table(top_items.head(15).style.format("{:,}"))
+            st.table(top_items.head(15).style.format({
+                "Sales": "{:,}",
+                "Total Robux": "{:,}",
+                "Est. USD": "${:,.2f}"
+            }))
             
     except Exception as e:
-        st.error(f"Processing... please refresh in 10s. (Error: {e})")
+        st.error(f"Error processing CSV: {e}")
 
 # Sidebar Info
 if group_id:
