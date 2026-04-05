@@ -15,7 +15,7 @@ except ImportError:
     import pandas as pd
     import requests
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
@@ -41,7 +41,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# --- DATA LOADER WITH CACHE ---
+# --- DATA LOADER ---
 @st.cache_data
 def load_data(files):
     df_list = []
@@ -55,7 +55,7 @@ if uploaded_files:
     try:
         df = load_data(uploaded_files)
 
-        # --- COLUMN DETECTION (ROBUST) ---
+        # --- COLUMN DETECTION ---
         possible_date_cols = ['Date and Time', 'Created', 'Date']
         possible_rev_cols = ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned']
         possible_item_cols = ['Asset Name', 'Item', 'Name']
@@ -68,13 +68,22 @@ if uploaded_files:
             st.error(f"❌ Required columns not found.\n\nColumns detected: {list(df.columns)}")
             st.stop()
 
-        # --- DATETIME FIX (UTC SAFE) ---
+        # ✅ FIX: CLEAN & CONVERT REVENUE COLUMN
+        df[rev_col] = (
+            df[rev_col]
+            .astype(str)
+            .str.replace(r"[^\d.-]", "", regex=True)
+        )
+        df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
+        df = df.dropna(subset=[rev_col])
+
+        # --- DATETIME FIX ---
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
         now = pd.Timestamp.utcnow()
 
-        # --- SIDEBAR DATE FILTER ---
+        # --- DATE FILTER ---
         st.sidebar.subheader("Date Filter")
 
         min_date = df[date_col].min().date()
@@ -87,7 +96,10 @@ if uploaded_files:
 
         if len(date_range) == 2:
             start_date, end_date = date_range
-            df = df[(df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)]
+            df = df[
+                (df[date_col].dt.date >= start_date) &
+                (df[date_col].dt.date <= end_date)
+            ]
 
         # --- TIME FILTERS ---
         df_today = df[df[date_col].dt.date == now.date()]
@@ -96,7 +108,7 @@ if uploaded_files:
         df_31d = df[df[date_col] >= (now - timedelta(days=31))]
         df_all = df.copy()
 
-        # --- TOP METRICS ---
+        # --- METRICS ---
         st.subheader("💰 Revenue Summary")
 
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -107,27 +119,26 @@ if uploaded_files:
             ("31 Days", df_31d),
             ("All Time", df_all)
         ]
-        cols = [c1, c2, c3, c4, c5]
 
-        for i, (label, data) in enumerate(periods):
+        for col, (label, data) in zip([c1, c2, c3, c4, c5], periods):
             robux_sum = int(data[rev_col].sum())
             usd_val = robux_sum * devex_rate
-            cols[i].metric(label, f"R$ {robux_sum:,}")
-            cols[i].write(f"**Est. DevEx (Gross):** ${usd_val:,.2f}")
+            col.metric(label, f"R$ {robux_sum:,}")
+            col.write(f"**Est. DevEx (Gross):** ${usd_val:,.2f}")
 
         # --- BEST SELLER TODAY ---
         if not df_today.empty and item_col:
             best_today = df_today.groupby(item_col)[rev_col].sum().idxmax()
             st.success(f"🔥 Best Seller Today: {best_today}")
 
-        # --- DAILY BAR CHART ---
+        # --- DAILY REVENUE ---
         st.divider()
         st.subheader("📊 Daily Revenue")
 
         daily = df.groupby(df[date_col].dt.date)[rev_col].sum()
         st.bar_chart(daily)
 
-        # --- ALL TIME TREND ---
+        # --- TREND ---
         st.divider()
         st.subheader("📈 Revenue Trend (All Time)")
 
@@ -156,7 +167,7 @@ if uploaded_files:
         else:
             st.line_chart(daily)
 
-        # --- TOP ITEMS TABLE ---
+        # --- TOP ITEMS ---
         st.divider()
         st.subheader("🏆 Top Selling Assets")
 
@@ -177,7 +188,7 @@ if uploaded_files:
                 .style.format("{:,.2f}")
             )
 
-        # --- DOWNLOAD CLEAN DATA ---
+        # --- DOWNLOAD ---
         st.download_button(
             "📥 Download Clean Data",
             df.to_csv(index=False),
