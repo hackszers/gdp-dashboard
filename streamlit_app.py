@@ -4,6 +4,9 @@ import pandas as pd
 import requests
 from datetime import timedelta
 
+# --- CONFIG ---
+FACIN_GROUP_ID = 123456789  # 🔥 REPLACE WITH REAL FACIN GROUP ID
+
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
 st.title("📊 Roblox Sales Dashboard")
@@ -14,14 +17,12 @@ group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
 st.sidebar.divider()
 st.sidebar.subheader("DevEx Settings")
 
-# ✅ Updated DevEx rate
 devex_rate = st.sidebar.number_input(
     "Exchange Rate (USD/1 R$)",
     value=0.0038,
     format="%.4f"
 )
 
-# ✅ MULTI FILE UPLOAD
 uploaded_files = st.file_uploader(
     "Upload 'Sale of Goods' CSVs",
     type=["csv"],
@@ -46,16 +47,22 @@ if uploaded_files:
         possible_date_cols = ['Date and Time', 'Created', 'Date']
         possible_rev_cols = ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned']
         possible_item_cols = ['Asset Name', 'Item', 'Name']
+        possible_group_cols = ['Creator ID', 'Group ID', 'CreatorTargetId', 'Seller ID']
 
         date_col = next((c for c in possible_date_cols if c in df.columns), None)
         rev_col = next((c for c in possible_rev_cols if c in df.columns), None)
         item_col = next((c for c in possible_item_cols if c in df.columns), None)
+        group_col = next((c for c in possible_group_cols if c in df.columns), None)
 
         if not date_col or not rev_col:
             st.error(f"❌ Required columns not found.\n\nColumns detected: {list(df.columns)}")
             st.stop()
 
-        # ✅ CLEAN & CONVERT REVENUE COLUMN (FIXES nlargest crash)
+        if not group_col:
+            st.error("❌ No Group ID column found. Cannot split revenue.")
+            st.stop()
+
+        # --- CLEAN REVENUE ---
         df[rev_col] = (
             df[rev_col]
             .astype(str)
@@ -64,11 +71,15 @@ if uploaded_files:
         df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # ✅ DATETIME FIX (robust parsing)
+        # --- CLEAN GROUP IDS ---
+        df[group_col] = pd.to_numeric(df[group_col], errors='coerce')
+        df = df.dropna(subset=[group_col])
+        df[group_col] = df[group_col].astype(int)
+
+        # --- DATETIME ---
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        # ✅ SAFE CURRENT TIME (no deprecation)
         now = pd.Timestamp.now("UTC")
 
         # --- DATE FILTER ---
@@ -88,6 +99,10 @@ if uploaded_files:
                 (df[date_col].dt.date >= start_date) &
                 (df[date_col].dt.date <= end_date)
             ]
+
+        # --- SPLIT DATA ---
+        facin_df = df[df[group_col] == FACIN_GROUP_ID]
+        other_df = df[df[group_col] != FACIN_GROUP_ID]
 
         # --- TIME FILTERS ---
         today_val = now.date()
@@ -116,10 +131,48 @@ if uploaded_files:
             col.metric(label, f"R$ {robux_sum:,}")
             col.write(f"**Est. DevEx:** ${usd_val:,.2f}")
 
-        # --- BEST SELLER TODAY ---
-        if not df_today.empty and item_col:
-            best_today = df_today.groupby(item_col)[rev_col].sum().idxmax()
-            st.success(f"🔥 Best Seller Today: {best_today}")
+        # --- SPLIT SYSTEM ---
+        st.divider()
+        st.subheader("💸 Revenue Split System")
+
+        facin_robux = int(facin_df[rev_col].sum())
+        other_robux = int(other_df[rev_col].sum())
+
+        facin_usd = facin_robux * devex_rate
+        other_usd = other_robux * devex_rate
+
+        facin_split_robux = facin_robux / 2
+        facin_split_usd = facin_usd / 2
+
+        her_total_robux = other_robux + facin_split_robux
+        her_total_usd = other_usd + facin_split_usd
+
+        partner_robux = facin_split_robux
+        partner_usd = facin_split_usd
+
+        s1, s2, s3 = st.columns(3)
+
+        s1.metric("Her Total Earnings", f"R$ {int(her_total_robux):,}")
+        s1.write(f"USD: ${her_total_usd:,.2f}")
+
+        s2.metric("Partner Earnings (Facin 50%)", f"R$ {int(partner_robux):,}")
+        s2.write(f"USD: ${partner_usd:,.2f}")
+
+        s3.metric("Facin Group Total", f"R$ {facin_robux:,}")
+        s3.write(f"USD: ${facin_usd:,.2f}")
+
+        # --- SPLIT CHART ---
+        st.subheader("📊 Revenue Split Over Time")
+
+        facin_daily = facin_df.groupby(facin_df[date_col].dt.date)[rev_col].sum()
+        other_daily = other_df.groupby(other_df[date_col].dt.date)[rev_col].sum()
+
+        combined = pd.DataFrame({
+            "Facin (50/50)": facin_daily,
+            "Other (100%)": other_daily
+        }).fillna(0)
+
+        st.line_chart(combined)
 
         # --- DAILY REVENUE ---
         st.divider()
@@ -127,37 +180,6 @@ if uploaded_files:
 
         daily = df.groupby(df[date_col].dt.date)[rev_col].sum()
         st.bar_chart(daily)
-
-        # --- TREND ---
-        st.divider()
-        st.subheader("📈 Revenue Trend (All Time)")
-
-        chart_data = df.copy()
-        chart_data['Date'] = chart_data[date_col].dt.date
-
-        if item_col:
-            # ✅ FIX: ensure numeric before nlargest
-            grouped = df.groupby(item_col)[rev_col].sum().sort_values(ascending=False)
-            top_5_names = grouped.head(5).index.tolist()
-
-            pivot_df = chart_data.pivot_table(
-                index='Date',
-                columns=item_col,
-                values=rev_col,
-                aggfunc='sum'
-            ).fillna(0)
-
-            main_cols = [c for c in pivot_df.columns if c in top_5_names]
-            other_cols = [c for c in pivot_df.columns if c not in top_5_names]
-
-            final_chart = pivot_df[main_cols].copy()
-
-            if other_cols:
-                final_chart['Other Assets'] = pivot_df[other_cols].sum(axis=1)
-
-            st.line_chart(final_chart)
-        else:
-            st.line_chart(daily)
 
         # --- TOP ITEMS ---
         st.divider()
