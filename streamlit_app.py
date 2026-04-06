@@ -34,7 +34,6 @@ def load_data(files):
     df_list = []
     for file in files:
         temp_df = pd.read_csv(file)
-        # Clean column names (remove whitespace)
         temp_df.columns = [c.strip() for c in temp_df.columns]
         df_list.append(temp_df)
     return pd.concat(df_list, ignore_index=True)
@@ -65,22 +64,22 @@ if uploaded_files:
         df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # ✅ DATETIME FIX: Ensure UTC awareness
+        # ✅ DATETIME FIX (Pandas 3.x/4.x compatible)
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        # ✅ CRITICAL FIX: Use .now('UTC') instead of .utcnow()
+        # ✅ CRITICAL FIX: Changed from .utcnow() to .now('UTC')
         now = pd.Timestamp.now('UTC')
 
         # --- DATE FILTER ---
         st.sidebar.subheader("Date Filter")
 
-        min_dt = df[date_col].min().date()
-        max_dt = df[date_col].max().date()
+        min_date = df[date_col].min().date()
+        max_date = df[date_col].max().date()
 
         date_range = st.sidebar.date_input(
             "Select Date Range",
-            [min_dt, max_dt]
+            [min_date, max_date]
         )
 
         if len(date_range) == 2:
@@ -91,7 +90,6 @@ if uploaded_files:
             ]
 
         # --- TIME FILTERS ---
-        # Using today's date from the UTC timestamp
         today_val = now.date()
         df_today = df[df[date_col].dt.date == today_val]
         df_yesterday = df[df[date_col].dt.date == (today_val - timedelta(days=1))]
@@ -173,7 +171,7 @@ if uploaded_files:
 
             top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
 
-            # Updated styling syntax for Pandas 3+
+            # ✅ STYLING FIX: Updated format syntax for Pandas 3/4
             st.table(
                 top_items.sort_values('Total Robux', ascending=False)
                 .head(15)
