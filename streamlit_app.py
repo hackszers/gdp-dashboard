@@ -1,33 +1,40 @@
-import os, subprocess, sys
 import streamlit as st
 import pandas as pd
-import requests
 from datetime import timedelta
-
-# --- CONFIG ---
-FACIN_GROUP_ID = 123456789  # 🔥 REPLACE WITH REAL FACIN GROUP ID
 
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
-st.title("📊 Roblox Sales Dashboard")
+st.title("📊 Roblox Sales Dashboard - Her Revenue After Split")
 
 # --- Sidebar ---
-group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
-
-st.sidebar.divider()
 st.sidebar.subheader("DevEx Settings")
-
 devex_rate = st.sidebar.number_input(
-    "Exchange Rate (USD/1 R$)",
+    "Exchange Rate (USD per 1 R$)",
     value=0.0038,
     format="%.4f"
 )
 
 uploaded_files = st.file_uploader(
-    "Upload 'Sale of Goods' CSVs",
+    "Upload Sales CSVs (multiple allowed)",
     type=["csv"],
     accept_multiple_files=True
 )
+
+# ====================== RULES ======================
+SPECIAL_CAPE_GROUP = 32600641
+
+# Only these Asset IDs in the Cape group are counted (50%)
+ALLOWED_CAPE_ASSET_IDS = {
+    82121186934297, 109090921647450, 126346507087936,
+    14426328438, 14426332963, 14426354335,
+    14424958183, 14424953018, 14424945182,
+    14343293342, 14343305312, 14343308456, 14343298093,
+    14434910968, 14434895327, 14434915218,
+    14434890711, 14434904829
+}
+
+FIFTY_PERCENT_GROUPS = {823805908}                    # FACIN - 50% on everything
+FULL_REVENUE_GROUPS = {13860593, 33024439, 35387713}  # Trippy Fashion, 3D, Hair
 
 # --- DATA LOADER ---
 @st.cache_data
@@ -43,183 +50,115 @@ if uploaded_files:
     try:
         df = load_data(uploaded_files)
 
-        # --- COLUMN DETECTION ---
-        possible_date_cols = ['Date and Time', 'Created', 'Date']
-        possible_rev_cols = ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned']
-        possible_item_cols = ['Asset Name', 'Item', 'Name']
-        possible_group_cols = ['Creator ID', 'Group ID', 'CreatorTargetId', 'Seller ID']
-
-        date_col = next((c for c in possible_date_cols if c in df.columns), None)
-        rev_col = next((c for c in possible_rev_cols if c in df.columns), None)
-        item_col = next((c for c in possible_item_cols if c in df.columns), None)
-        group_col = next((c for c in possible_group_cols if c in df.columns), None)
+        # Column detection
+        date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
+        rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
+        asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId'] if c in df.columns), None)
 
         if not date_col or not rev_col:
-            st.error(f"❌ Required columns not found.\n\nColumns detected: {list(df.columns)}")
+            st.error(f"Missing required columns. Found: {list(df.columns)}")
             st.stop()
 
-        if not group_col:
-            st.error("❌ No Group ID column found. Cannot split revenue.")
-            st.stop()
-
-        # --- CLEAN REVENUE ---
-        df[rev_col] = (
-            df[rev_col]
-            .astype(str)
-            .str.replace(r"[^\d.-]", "", regex=True)
+        # Clean Revenue
+        df[rev_col] = pd.to_numeric(
+            df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True),
+            errors='coerce'
         )
-        df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # --- CLEAN GROUP IDS ---
-        df[group_col] = pd.to_numeric(df[group_col], errors='coerce')
-        df = df.dropna(subset=[group_col])
-        df[group_col] = df[group_col].astype(int)
+        # Clean Asset Id
+        if asset_col:
+            df[asset_col] = pd.to_numeric(df[asset_col], errors='coerce')
 
-        # --- DATETIME ---
+        # Datetime
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
         now = pd.Timestamp.now("UTC")
 
-        # --- DATE FILTER ---
-        st.sidebar.subheader("Date Filter")
+        # ====================== HER SHARE CALCULATION ======================
+        def get_her_share(row):
+            try:
+                group = int(row.get('Group Id', 0)) if 'Group Id' in df.columns else 0
+            except:
+                group = 0
 
+            revenue = row[rev_col]
+            asset_id = row.get(asset_col) if asset_col else None
+
+            if group == SPECIAL_CAPE_GROUP:
+                # Only count if Asset ID is in the allowed list
+                if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
+                    return revenue * 0.5   # 50% split
+                else:
+                    return 0               # Ignore all other capes
+
+            elif group in FIFTY_PERCENT_GROUPS:
+                return revenue * 0.5       # 50% on everything
+
+            else:
+                return revenue             # 100% for Trippy groups + any other groups she owns
+
+        df['Her Robux'] = df.apply(get_her_share, axis=1)
+        df['Her USD'] = df['Her Robux'] * devex_rate
+
+        # ====================== DATE FILTER ======================
+        st.sidebar.subheader("Date Filter")
         min_date = df[date_col].min().date()
         max_date = df[date_col].max().date()
-
-        date_range = st.sidebar.date_input(
-            "Select Date Range",
-            [min_date, max_date]
-        )
+        date_range = st.sidebar.date_input("Select Date Range", [min_date, max_date])
 
         if len(date_range) == 2:
             start_date, end_date = date_range
-            df = df[
-                (df[date_col].dt.date >= start_date) &
-                (df[date_col].dt.date <= end_date)
-            ]
+            df = df[(df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)]
 
-        # --- SPLIT DATA ---
-        facin_df = df[df[group_col] == FACIN_GROUP_ID]
-        other_df = df[df[group_col] != FACIN_GROUP_ID]
+        # ====================== METRICS ======================
+        st.subheader("💰 Her Revenue Summary (After Split)")
 
-        # --- TIME FILTERS ---
-        today_val = now.date()
+        total_her_robux = int(df['Her Robux'].sum())
+        total_her_usd = total_her_robux * devex_rate
 
-        df_today = df[df[date_col].dt.date == today_val]
-        df_yesterday = df[df[date_col].dt.date == (today_val - timedelta(days=1))]
-        df_7d = df[df[date_col] >= (now - timedelta(days=7))]
-        df_31d = df[df[date_col] >= (now - timedelta(days=31))]
-        df_all = df.copy()
+        col1, col2 = st.columns(2)
+        col1.metric("Total Her Robux", f"R$ {total_her_robux:,}")
+        col2.metric("Estimated DevEx (Her Share)", f"${total_her_usd:,.2f}")
 
-        # --- METRICS ---
-        st.subheader("💰 Revenue Summary")
-
-        c1, c2, c3, c4, c5 = st.columns(5)
+        # Period metrics
+        cols = st.columns(4)
         periods = [
-            ("Today", df_today),
-            ("Yesterday", df_yesterday),
-            ("7 Days", df_7d),
-            ("31 Days", df_31d),
-            ("All Time", df_all)
+            ("Today", df[df[date_col].dt.date == now.date()]),
+            ("7 Days", df[df[date_col] >= (now - timedelta(days=7))]),
+            ("31 Days", df[df[date_col] >= (now - timedelta(days=31))]),
+            ("All Time", df)
         ]
 
-        for col, (label, data) in zip([c1, c2, c3, c4, c5], periods):
-            robux_sum = int(data[rev_col].sum())
-            usd_val = robux_sum * devex_rate
-            col.metric(label, f"R$ {robux_sum:,}")
-            col.write(f"**Est. DevEx:** ${usd_val:,.2f}")
+        for col, (label, data) in zip(cols, periods):
+            robux = int(data['Her Robux'].sum())
+            usd = robux * devex_rate
+            col.metric(label, f"R$ {robux:,}")
+            col.write(f"**USD:** ${usd:,.2f}")
 
-        # --- SPLIT SYSTEM ---
         st.divider()
-        st.subheader("💸 Revenue Split System")
-
-        facin_robux = int(facin_df[rev_col].sum())
-        other_robux = int(other_df[rev_col].sum())
-
-        facin_usd = facin_robux * devex_rate
-        other_usd = other_robux * devex_rate
-
-        facin_split_robux = facin_robux / 2
-        facin_split_usd = facin_usd / 2
-
-        her_total_robux = other_robux + facin_split_robux
-        her_total_usd = other_usd + facin_split_usd
-
-        partner_robux = facin_split_robux
-        partner_usd = facin_split_usd
-
-        s1, s2, s3 = st.columns(3)
-
-        s1.metric("Her Total Earnings", f"R$ {int(her_total_robux):,}")
-        s1.write(f"USD: ${her_total_usd:,.2f}")
-
-        s2.metric("Partner Earnings (Facin 50%)", f"R$ {int(partner_robux):,}")
-        s2.write(f"USD: ${partner_usd:,.2f}")
-
-        s3.metric("Facin Group Total", f"R$ {facin_robux:,}")
-        s3.write(f"USD: ${facin_usd:,.2f}")
-
-        # --- SPLIT CHART ---
-        st.subheader("📊 Revenue Split Over Time")
-
-        facin_daily = facin_df.groupby(facin_df[date_col].dt.date)[rev_col].sum()
-        other_daily = other_df.groupby(other_df[date_col].dt.date)[rev_col].sum()
-
-        combined = pd.DataFrame({
-            "Facin (50/50)": facin_daily,
-            "Other (100%)": other_daily
-        }).fillna(0)
-
-        st.line_chart(combined)
-
-        # --- DAILY REVENUE ---
-        st.divider()
-        st.subheader("📊 Daily Revenue")
-
-        daily = df.groupby(df[date_col].dt.date)[rev_col].sum()
+        st.subheader("📊 Daily Her Revenue")
+        daily = df.groupby(df[date_col].dt.date)['Her Robux'].sum()
         st.bar_chart(daily)
 
-        # --- TOP ITEMS ---
+        # Top Assets (Her Share)
         st.divider()
-        st.subheader("🏆 Top Selling Assets")
+        st.subheader("🏆 Top Assets - Her Share")
+        if asset_col and 'Asset Name' in df.columns:
+            top = df.groupby(['Asset Name', asset_col]).agg({
+                'Her Robux': 'sum'
+            }).sort_values('Her Robux', ascending=False)
+            top['Her USD'] = top['Her Robux'] * devex_rate
+            st.dataframe(top.head(20).style.format({"Her Robux": "{:,.0f}", "Her USD": "${:,.2f}"}))
 
-        if item_col:
-            top_items = df.groupby(item_col).agg({
-                rev_col: 'sum',
-                item_col: 'count'
-            }).rename(columns={
-                item_col: 'Sales',
-                rev_col: 'Total Robux'
-            })
-
-            top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
-
-            st.table(
-                top_items.sort_values('Total Robux', ascending=False)
-                .head(15)
-                .style.format(precision=2, thousands=",")
-            )
-
-        # --- DOWNLOAD ---
+        # Download
         st.download_button(
-            "📥 Download Clean Data",
+            "📥 Download Data with Her Share",
             df.to_csv(index=False),
-            file_name="cleaned_roblox_sales.csv"
+            file_name="her_revenue_split.csv"
         )
 
     except Exception as e:
-        st.error("🔥 App crashed")
+        st.error("App crashed")
         st.exception(e)
-
-# --- GROUP INFO ---
-if group_id:
-    try:
-        r = requests.get(
-            f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2"
-        )
-        if r.status_code == 200:
-            st.sidebar.success(f"📦 Recent Items Found: {len(r.json().get('data', []))}")
-    except:
-        pass
