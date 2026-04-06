@@ -55,7 +55,7 @@ if uploaded_files:
             st.error(f"❌ Required columns not found.\n\nColumns detected: {list(df.columns)}")
             st.stop()
 
-        # ✅ CLEAN & CONVERT REVENUE COLUMN
+        # ✅ CLEAN & CONVERT REVENUE COLUMN (FIXES nlargest crash)
         df[rev_col] = (
             df[rev_col]
             .astype(str)
@@ -64,12 +64,12 @@ if uploaded_files:
         df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # ✅ DATETIME FIX (Pandas 3.x/4.x compatible)
+        # ✅ DATETIME FIX (robust parsing)
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        # ✅ CRITICAL FIX: Changed from .utcnow() to .now('UTC')
-        now = pd.Timestamp.now('UTC')
+        # ✅ SAFE CURRENT TIME (no deprecation)
+        now = pd.Timestamp.now("UTC")
 
         # --- DATE FILTER ---
         st.sidebar.subheader("Date Filter")
@@ -91,6 +91,7 @@ if uploaded_files:
 
         # --- TIME FILTERS ---
         today_val = now.date()
+
         df_today = df[df[date_col].dt.date == today_val]
         df_yesterday = df[df[date_col].dt.date == (today_val - timedelta(days=1))]
         df_7d = df[df[date_col] >= (now - timedelta(days=7))]
@@ -135,7 +136,9 @@ if uploaded_files:
         chart_data['Date'] = chart_data[date_col].dt.date
 
         if item_col:
-            top_5_names = df.groupby(item_col)[rev_col].sum().nlargest(5).index.tolist()
+            # ✅ FIX: ensure numeric before nlargest
+            grouped = df.groupby(item_col)[rev_col].sum().sort_values(ascending=False)
+            top_5_names = grouped.head(5).index.tolist()
 
             pivot_df = chart_data.pivot_table(
                 index='Date',
@@ -171,7 +174,6 @@ if uploaded_files:
 
             top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
 
-            # ✅ STYLING FIX: Updated format syntax for Pandas 3/4
             st.table(
                 top_items.sort_values('Total Robux', ascending=False)
                 .head(15)
@@ -186,12 +188,15 @@ if uploaded_files:
         )
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error("🔥 App crashed")
+        st.exception(e)
 
 # --- GROUP INFO ---
 if group_id:
     try:
-        r = requests.get(f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2")
+        r = requests.get(
+            f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2"
+        )
         if r.status_code == 200:
             st.sidebar.success(f"📦 Recent Items Found: {len(r.json().get('data', []))}")
     except:
