@@ -1,20 +1,7 @@
 import os, subprocess, sys
 import streamlit as st
-
-# --- AUTO-INSTALLER ---
-def install(package):
-    try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-    except: pass
-
-try:
-    import pandas as pd
-    import requests
-except ImportError:
-    install('pandas')
-    install('requests')
-    import pandas as pd
-    import requests
-
+import pandas as pd
+import requests
 from datetime import timedelta
 
 # --- Page Config ---
@@ -23,18 +10,15 @@ st.title("📊 Roblox Sales Dashboard")
 
 # --- Sidebar ---
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
-
 st.sidebar.divider()
 st.sidebar.subheader("DevEx Settings")
 
-# ✅ Updated DevEx rate
 devex_rate = st.sidebar.number_input(
     "Exchange Rate (USD/1 R$)",
     value=0.0038,
     format="%.4f"
 )
 
-# ✅ MULTI FILE UPLOAD
 uploaded_files = st.file_uploader(
     "Upload 'Sale of Goods' CSVs",
     type=["csv"],
@@ -68,7 +52,7 @@ if uploaded_files:
             st.error(f"❌ Required columns not found.\n\nColumns detected: {list(df.columns)}")
             st.stop()
 
-        # ✅ FIX: CLEAN & CONVERT REVENUE COLUMN
+        # ✅ CLEAN & CONVERT REVENUE COLUMN
         df[rev_col] = (
             df[rev_col]
             .astype(str)
@@ -77,15 +61,15 @@ if uploaded_files:
         df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # --- DATETIME FIX ---
+        # ✅ DATETIME FIX (Pandas 4 compatibility)
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        now = pd.Timestamp.utcnow()
+        # ✅ FIX: Updated from utcnow() to now('UTC')
+        now = pd.Timestamp.now('UTC')
 
         # --- DATE FILTER ---
         st.sidebar.subheader("Date Filter")
-
         min_date = df[date_col].min().date()
         max_date = df[date_col].max().date()
 
@@ -96,21 +80,22 @@ if uploaded_files:
 
         if len(date_range) == 2:
             start_date, end_date = date_range
+            # Convert to datetime64[ns, UTC] for proper comparison
             df = df[
-                (df[date_col].dt.date >= start_date) &
+                (df[date_col].dt.date >= start_date) & 
                 (df[date_col].dt.date <= end_date)
             ]
 
         # --- TIME FILTERS ---
-        df_today = df[df[date_col].dt.date == now.date()]
-        df_yesterday = df[df[date_col].dt.date == (now.date() - timedelta(days=1))]
+        today_date = now.date()
+        df_today = df[df[date_col].dt.date == today_date]
+        df_yesterday = df[df[date_col].dt.date == (today_date - timedelta(days=1))]
         df_7d = df[df[date_col] >= (now - timedelta(days=7))]
         df_31d = df[df[date_col] >= (now - timedelta(days=31))]
         df_all = df.copy()
 
         # --- METRICS ---
         st.subheader("💰 Revenue Summary")
-
         c1, c2, c3, c4, c5 = st.columns(5)
         periods = [
             ("Today", df_today),
@@ -124,7 +109,7 @@ if uploaded_files:
             robux_sum = int(data[rev_col].sum())
             usd_val = robux_sum * devex_rate
             col.metric(label, f"R$ {robux_sum:,}")
-            col.write(f"**Est. DevEx (Gross):** ${usd_val:,.2f}")
+            col.write(f"**Est. DevEx:** ${usd_val:,.2f}")
 
         # --- BEST SELLER TODAY ---
         if not df_today.empty and item_col:
@@ -134,20 +119,17 @@ if uploaded_files:
         # --- DAILY REVENUE ---
         st.divider()
         st.subheader("📊 Daily Revenue")
-
         daily = df.groupby(df[date_col].dt.date)[rev_col].sum()
         st.bar_chart(daily)
 
         # --- TREND ---
         st.divider()
         st.subheader("📈 Revenue Trend (All Time)")
-
         chart_data = df.copy()
         chart_data['Date'] = chart_data[date_col].dt.date
 
         if item_col:
             top_5_names = df.groupby(item_col)[rev_col].sum().nlargest(5).index.tolist()
-
             pivot_df = chart_data.pivot_table(
                 index='Date',
                 columns=item_col,
@@ -157,12 +139,9 @@ if uploaded_files:
 
             main_cols = [c for c in pivot_df.columns if c in top_5_names]
             other_cols = [c for c in pivot_df.columns if c not in top_5_names]
-
             final_chart = pivot_df[main_cols].copy()
-
             if other_cols:
                 final_chart['Other Assets'] = pivot_df[other_cols].sum(axis=1)
-
             st.line_chart(final_chart)
         else:
             st.line_chart(daily)
@@ -170,7 +149,6 @@ if uploaded_files:
         # --- TOP ITEMS ---
         st.divider()
         st.subheader("🏆 Top Selling Assets")
-
         if item_col:
             top_items = df.groupby(item_col).agg({
                 rev_col: 'sum',
@@ -179,13 +157,11 @@ if uploaded_files:
                 item_col: 'Sales',
                 rev_col: 'Total Robux'
             })
-
             top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
-
             st.table(
                 top_items.sort_values('Total Robux', ascending=False)
                 .head(15)
-                .style.format("{:,.2f}")
+                .style.format(precision=2, thousands=",")
             )
 
         # --- DOWNLOAD ---
