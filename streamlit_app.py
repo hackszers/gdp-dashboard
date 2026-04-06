@@ -10,15 +10,18 @@ st.title("📊 Roblox Sales Dashboard")
 
 # --- Sidebar ---
 group_id = st.sidebar.text_input("Enter Roblox Group ID", value="823805908")
+
 st.sidebar.divider()
 st.sidebar.subheader("DevEx Settings")
 
+# ✅ Updated DevEx rate
 devex_rate = st.sidebar.number_input(
     "Exchange Rate (USD/1 R$)",
     value=0.0038,
     format="%.4f"
 )
 
+# ✅ MULTI FILE UPLOAD
 uploaded_files = st.file_uploader(
     "Upload 'Sale of Goods' CSVs",
     type=["csv"],
@@ -31,6 +34,7 @@ def load_data(files):
     df_list = []
     for file in files:
         temp_df = pd.read_csv(file)
+        # Clean column names (remove whitespace)
         temp_df.columns = [c.strip() for c in temp_df.columns]
         df_list.append(temp_df)
     return pd.concat(df_list, ignore_index=True)
@@ -61,41 +65,43 @@ if uploaded_files:
         df[rev_col] = pd.to_numeric(df[rev_col], errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # ✅ DATETIME FIX (Pandas 4 compatibility)
+        # ✅ DATETIME FIX: Ensure UTC awareness
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        # ✅ FIX: Updated from utcnow() to now('UTC')
+        # ✅ CRITICAL FIX: Use .now('UTC') instead of .utcnow()
         now = pd.Timestamp.now('UTC')
 
         # --- DATE FILTER ---
         st.sidebar.subheader("Date Filter")
-        min_date = df[date_col].min().date()
-        max_date = df[date_col].max().date()
+
+        min_dt = df[date_col].min().date()
+        max_dt = df[date_col].max().date()
 
         date_range = st.sidebar.date_input(
             "Select Date Range",
-            [min_date, max_date]
+            [min_dt, max_dt]
         )
 
         if len(date_range) == 2:
             start_date, end_date = date_range
-            # Convert to datetime64[ns, UTC] for proper comparison
             df = df[
-                (df[date_col].dt.date >= start_date) & 
+                (df[date_col].dt.date >= start_date) &
                 (df[date_col].dt.date <= end_date)
             ]
 
         # --- TIME FILTERS ---
-        today_date = now.date()
-        df_today = df[df[date_col].dt.date == today_date]
-        df_yesterday = df[df[date_col].dt.date == (today_date - timedelta(days=1))]
+        # Using today's date from the UTC timestamp
+        today_val = now.date()
+        df_today = df[df[date_col].dt.date == today_val]
+        df_yesterday = df[df[date_col].dt.date == (today_val - timedelta(days=1))]
         df_7d = df[df[date_col] >= (now - timedelta(days=7))]
         df_31d = df[df[date_col] >= (now - timedelta(days=31))]
         df_all = df.copy()
 
         # --- METRICS ---
         st.subheader("💰 Revenue Summary")
+
         c1, c2, c3, c4, c5 = st.columns(5)
         periods = [
             ("Today", df_today),
@@ -119,17 +125,20 @@ if uploaded_files:
         # --- DAILY REVENUE ---
         st.divider()
         st.subheader("📊 Daily Revenue")
+
         daily = df.groupby(df[date_col].dt.date)[rev_col].sum()
         st.bar_chart(daily)
 
         # --- TREND ---
         st.divider()
         st.subheader("📈 Revenue Trend (All Time)")
+
         chart_data = df.copy()
         chart_data['Date'] = chart_data[date_col].dt.date
 
         if item_col:
             top_5_names = df.groupby(item_col)[rev_col].sum().nlargest(5).index.tolist()
+
             pivot_df = chart_data.pivot_table(
                 index='Date',
                 columns=item_col,
@@ -139,9 +148,12 @@ if uploaded_files:
 
             main_cols = [c for c in pivot_df.columns if c in top_5_names]
             other_cols = [c for c in pivot_df.columns if c not in top_5_names]
+
             final_chart = pivot_df[main_cols].copy()
+
             if other_cols:
                 final_chart['Other Assets'] = pivot_df[other_cols].sum(axis=1)
+
             st.line_chart(final_chart)
         else:
             st.line_chart(daily)
@@ -149,6 +161,7 @@ if uploaded_files:
         # --- TOP ITEMS ---
         st.divider()
         st.subheader("🏆 Top Selling Assets")
+
         if item_col:
             top_items = df.groupby(item_col).agg({
                 rev_col: 'sum',
@@ -157,7 +170,10 @@ if uploaded_files:
                 item_col: 'Sales',
                 rev_col: 'Total Robux'
             })
+
             top_items['Est. USD'] = (top_items['Total Robux'] * devex_rate).round(2)
+
+            # Updated styling syntax for Pandas 3+
             st.table(
                 top_items.sort_values('Total Robux', ascending=False)
                 .head(15)
@@ -179,6 +195,6 @@ if group_id:
     try:
         r = requests.get(f"https://catalog.roblox.com/v1/search/items/details?Category=3&CreatorTargetId={group_id}&CreatorType=2")
         if r.status_code == 200:
-            st.sidebar.success(f"📦 Recent Items: {len(r.json().get('data', []))}")
+            st.sidebar.success(f"📦 Recent Items Found: {len(r.json().get('data', []))}")
     except:
         pass
