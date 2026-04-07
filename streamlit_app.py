@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import timedelta
-import re
 
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
@@ -36,24 +34,44 @@ ALLOWED_CAPE_ASSET_IDS = {
 FIFTY_PERCENT_GROUPS = {823805908}
 FULL_REVENUE_GROUPS = {13860593, 33024439, 35387713}
 
-# --- DATA LOADER ---
+# ====================== DATA LOADER ======================
 @st.cache_data
 def load_data(files):
     df_list = []
+
     for file in files:
         temp_df = pd.read_csv(file)
         temp_df.columns = [c.strip() for c in temp_df.columns]
-        # Try to detect if this is a Cape Group file from filename
-        if hasattr(file, 'name') and '32600641' in file.name:
-            temp_df['Group Id'] = SPECIAL_CAPE_GROUP
+
+        # --- Ensure Group Id exists ---
+        if 'Group Id' not in temp_df.columns:
+            temp_df['Group Id'] = 0
+
+        # --- Detect group from filename ---
+        if hasattr(file, 'name'):
+            name = file.name
+
+            if '32600641' in name:
+                temp_df['Group Id'] = 32600641
+            elif '823805908' in name:
+                temp_df['Group Id'] = 823805908
+            elif '13860593' in name:
+                temp_df['Group Id'] = 13860593
+            elif '33024439' in name:
+                temp_df['Group Id'] = 33024439
+            elif '35387713' in name:
+                temp_df['Group Id'] = 35387713
+
         df_list.append(temp_df)
+
     return pd.concat(df_list, ignore_index=True)
 
+# ====================== MAIN ======================
 if uploaded_files:
     try:
         df = load_data(uploaded_files)
 
-        # Column detection
+        # --- Column Detection ---
         date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
         rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
         asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId', 'AssetID'] if c in df.columns), None)
@@ -63,8 +81,11 @@ if uploaded_files:
             st.error(f"Missing required columns. Found: {list(df.columns)}")
             st.stop()
 
-        # Clean data
-        df[rev_col] = pd.to_numeric(df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True), errors='coerce')
+        # --- Clean Data ---
+        df[rev_col] = pd.to_numeric(
+            df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True),
+            errors='coerce'
+        )
         df = df.dropna(subset=[rev_col])
 
         if asset_col:
@@ -73,27 +94,31 @@ if uploaded_files:
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
-        now = pd.Timestamp.now("UTC")
-
-        # ====================== HER SHARE CALCULATION ======================
+        # ====================== HER SHARE CALC ======================
         def get_her_share(row):
             revenue = row[rev_col]
+            group = int(row.get('Group Id', 0))
             asset_id = row.get(asset_col)
 
-            # Force Cape Group logic if Group Id was added from filename
-            group = row.get('Group Id', 0)
-
-            if group == SPECIAL_CAPE_GROUP or (pd.notna(asset_id) and asset_id in ALLOWED_CAPE_ASSET_IDS):
+            # --- Cape Group Logic ---
+            if group == SPECIAL_CAPE_GROUP:
                 if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
                     return revenue * 0.5
-                else:
-                    return 0.0
+                return 0.0
 
-            elif group in FIFTY_PERCENT_GROUPS:
+            # --- Asset-based fallback (if group missing but ID matches) ---
+            if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
                 return revenue * 0.5
 
-            else:
+            # --- Other Groups ---
+            if group in FIFTY_PERCENT_GROUPS:
+                return revenue * 0.5
+
+            if group in FULL_REVENUE_GROUPS:
                 return revenue
+
+            # --- Default fallback ---
+            return revenue
 
         df['Her Robux'] = df.apply(get_her_share, axis=1).round(0)
         df['Her USD'] = df['Her Robux'] * devex_rate
@@ -102,27 +127,37 @@ if uploaded_files:
         st.sidebar.subheader("Debug Info")
         st.sidebar.write(f"**Files Uploaded:** {len(uploaded_files)}")
         st.sidebar.write(f"**Total Rows:** {len(df)}")
-        if 'Group Id' in df.columns:
-            st.sidebar.write(f"**Cape Group Rows:** {(df['Group Id'] == SPECIAL_CAPE_GROUP).sum()}")
 
-        # Show how many capes are allowed vs ignored
+        if 'Group Id' in df.columns:
+            st.sidebar.write("**Group Breakdown:**")
+            st.sidebar.write(df['Group Id'].value_counts())
+
+        # --- Cape stats ---
         if asset_col:
-            cape_mask = df[asset_col].isin(ALLOWED_CAPE_ASSET_IDS)
-            st.subheader(f"✅ Allowed Capes (50% Share): {cape_mask.sum():,} sales")
-            st.subheader(f"❌ Ignored Capes (0% Share): {(~cape_mask).sum():,} sales")
+            allowed_mask = df[asset_col].isin(ALLOWED_CAPE_ASSET_IDS)
+            ignored_mask = df[asset_col].notna() & ~allowed_mask
+
+            st.subheader(f"✅ Allowed Capes (50% Share): {allowed_mask.sum():,} sales")
+            st.subheader(f"❌ Ignored Capes (0% Share): {ignored_mask.sum():,} sales")
 
         # ====================== DATE FILTER ======================
         st.sidebar.subheader("Date Filter")
+
         min_date = df[date_col].min().date()
         max_date = df[date_col].max().date()
+
         date_range = st.sidebar.date_input("Select Date Range", [min_date, max_date])
 
         if len(date_range) == 2:
             start_date, end_date = date_range
-            df = df[(df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)]
+            df = df[
+                (df[date_col].dt.date >= start_date) &
+                (df[date_col].dt.date <= end_date)
+            ]
 
         # ====================== METRICS ======================
         st.subheader("💰 Her Revenue Summary (After Split)")
+
         total_her_robux = int(df['Her Robux'].sum())
         total_her_usd = total_her_robux * devex_rate
 
@@ -130,15 +165,23 @@ if uploaded_files:
         col1.metric("Total Her Robux", f"R$ {total_her_robux:,}")
         col2.metric("Estimated DevEx (Her Share)", f"${total_her_usd:,.2f}")
 
-        # Top Assets
+        # ====================== TOP ASSETS ======================
         st.divider()
         st.subheader("🏆 Top Assets - Her Share")
+
         if name_col and asset_col:
             top = df.groupby([name_col, asset_col])['Her Robux'].sum().reset_index()
             top = top.sort_values('Her Robux', ascending=False)
             top['Her USD'] = top['Her Robux'] * devex_rate
-            st.dataframe(top.head(30).style.format({"Her Robux": "{:,.0f}", "Her USD": "${:,.2f}"}))
 
+            st.dataframe(
+                top.head(30).style.format({
+                    "Her Robux": "{:,.0f}",
+                    "Her USD": "${:,.2f}"
+                })
+            )
+
+        # ====================== DOWNLOAD ======================
         st.download_button(
             "📥 Download Data with Her Share",
             df.to_csv(index=False),
