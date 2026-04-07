@@ -111,7 +111,7 @@ if uploaded_files:
     df['Her Robux'] = df.apply(get_her_share, axis=1)
     df['Her USD'] = df['Her Robux'] * DEVEX_RATE
 
-    # ====================== TIME FILTERS ======================
+    # ====================== GLOBAL KPIs ======================
     today = now.normalize()
     yesterday = today - pd.Timedelta(days=1)
     last_28 = today - pd.Timedelta(days=28)
@@ -130,7 +130,6 @@ if uploaded_files:
     l_r, l_u = calc(df_28)
     a_r, a_u = calc(df)
 
-    # ====================== KPI DISPLAY ======================
     st.subheader("📅 Revenue Breakdown")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -139,14 +138,42 @@ if uploaded_files:
     col3.metric("Last 28 Days", f"R$ {l_r:,}", f"${l_u:,.2f}")
     col4.metric("All Time", f"R$ {a_r:,}", f"${a_u:,.2f}")
 
+    # ====================== DATE RANGE FILTER ======================
+    st.divider()
+    st.subheader("📅 Filter Data")
+
+    preset = st.selectbox(
+        "Select Range",
+        ["Last 7 days", "Last 28 days", "Last 56 days", "Last 90 days", "Custom"]
+    )
+
+    if preset != "Custom":
+        days_map = {
+            "Last 7 days": 7,
+            "Last 28 days": 28,
+            "Last 56 days": 56,
+            "Last 90 days": 90
+        }
+        start_date = (now - pd.Timedelta(days=days_map[preset])).date()
+        end_date = now.date()
+    else:
+        col1, col2 = st.columns(2)
+        start_date = col1.date_input("Start date", value=(now - pd.Timedelta(days=7)).date())
+        end_date = col2.date_input("End date", value=now.date())
+
+    start_dt = pd.to_datetime(start_date).tz_localize("UTC")
+    end_dt = pd.to_datetime(end_date).tz_localize("UTC") + pd.Timedelta(days=1)
+
+    filtered_df = df[(df[date_col] >= start_dt) & (df[date_col] < end_dt)]
+
     # ====================== DAILY GRAPH ======================
     st.divider()
     st.subheader("📈 Daily Sales Trend")
 
-    df['Date Only'] = df[date_col].dt.date
+    filtered_df['Date Only'] = filtered_df[date_col].dt.date
 
     daily_sales = (
-        df.groupby('Date Only')['Her Robux']
+        filtered_df.groupby('Date Only')['Her Robux']
         .sum()
         .reset_index()
         .sort_values('Date Only')
@@ -171,11 +198,11 @@ if uploaded_files:
 
     # ====================== BEST SELLERS ======================
     st.divider()
-    st.subheader("🏆 Best Selling Items (Her Revenue)")
+    st.subheader("🏆 Best Selling Items (Filtered)")
 
     if name_col and asset_col:
         top = (
-            df.groupby([name_col, asset_col])['Her Robux']
+            filtered_df.groupby([name_col, asset_col])['Her Robux']
             .sum()
             .reset_index()
             .sort_values('Her Robux', ascending=False)
@@ -192,7 +219,7 @@ if uploaded_files:
 
     # ====================== DOWNLOAD ======================
     st.download_button(
-        "📥 Download Full Data",
-        df.to_csv(index=False),
-        file_name="roblox_revenue.csv"
+        "📥 Download Filtered Data",
+        filtered_df.to_csv(index=False),
+        file_name="roblox_filtered_revenue.csv"
     )
