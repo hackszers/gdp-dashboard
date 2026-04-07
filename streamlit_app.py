@@ -33,7 +33,7 @@ ALLOWED_CAPE_ASSET_IDS = {
     14434890711, 14434904829
 }
 
-FIFTY_PERCENT_GROUPS = {823805908}                    # FACIN - 50% on everything
+FIFTY_PERCENT_GROUPS = {823805908}   # FACIN - 50% on everything
 FULL_REVENUE_GROUPS = {13860593, 33024439, 35387713}  # Trippy Fashion, 3D, Hair
 
 # --- DATA LOADER ---
@@ -53,7 +53,11 @@ if uploaded_files:
         # Column detection
         date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
         rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
-        asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId'] if c in df.columns), None)
+        asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId', 'AssetID'] if c in df.columns), None)
+
+        # Improved Group ID detection
+        group_col = next((c for c in ['Group Id', 'Group ID', 'GroupId', 'group_id', 'Group'] 
+                         if c in df.columns), None)
 
         if not date_col or not rev_col:
             st.error(f"Missing required columns. Found: {list(df.columns)}")
@@ -76,31 +80,44 @@ if uploaded_files:
 
         now = pd.Timestamp.now("UTC")
 
-        # ====================== HER SHARE CALCULATION ======================
+        # ====================== HER SHARE CALCULATION (Fixed) ======================
         def get_her_share(row):
-            try:
-                group = int(row.get('Group Id', 0)) if 'Group Id' in df.columns else 0
-            except:
+            # Get group safely
+            if group_col and group_col in row:
+                try:
+                    group = int(row[group_col])
+                except (ValueError, TypeError):
+                    group = 0
+            else:
                 group = 0
 
             revenue = row[rev_col]
             asset_id = row.get(asset_col) if asset_col else None
 
             if group == SPECIAL_CAPE_GROUP:
-                # Only count if Asset ID is in the allowed list
+                # Only specific capes get 50%, everything else in this group = 0
                 if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
-                    return revenue * 0.5   # 50% split
+                    return revenue * 0.5
                 else:
-                    return 0               # Ignore all other capes
+                    return 0  # Ignore other capes in the special group
 
             elif group in FIFTY_PERCENT_GROUPS:
-                return revenue * 0.5       # 50% on everything
+                return revenue * 0.5
 
             else:
-                return revenue             # 100% for Trippy groups + any other groups she owns
+                # 100% for Trippy groups and any other groups she fully owns
+                return revenue
 
         df['Her Robux'] = df.apply(get_her_share, axis=1)
         df['Her USD'] = df['Her Robux'] * devex_rate
+
+        # ====================== DEBUG INFO ======================
+        st.sidebar.subheader("Debug Info")
+        st.sidebar.write(f"**Group Column Detected:** {group_col}")
+        if group_col:
+            unique_groups = df[group_col].dropna().unique()
+            st.sidebar.write(f"Unique Groups Found: {len(unique_groups)}")
+            st.sidebar.write(unique_groups[:10])  # Show first 10
 
         # ====================== DATE FILTER ======================
         st.sidebar.subheader("Date Filter")
@@ -114,7 +131,6 @@ if uploaded_files:
 
         # ====================== METRICS ======================
         st.subheader("💰 Her Revenue Summary (After Split)")
-
         total_her_robux = int(df['Her Robux'].sum())
         total_her_usd = total_her_robux * devex_rate
 
