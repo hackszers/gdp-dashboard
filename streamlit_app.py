@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
@@ -119,7 +120,6 @@ if uploaded_files:
     df_yesterday = df[(df[date_col] >= yesterday) & (df[date_col] < today)]
     df_28 = df[df[date_col] >= last_28]
 
-    # ====================== KPI FUNCTION ======================
     def calc(df_slice):
         robux = int(df_slice['Her Robux'].sum())
         usd = robux * DEVEX_RATE
@@ -134,11 +134,40 @@ if uploaded_files:
     st.subheader("📅 Revenue Breakdown")
 
     col1, col2, col3, col4 = st.columns(4)
-
     col1.metric("Today", f"R$ {t_r:,}", f"${t_u:,.2f}")
     col2.metric("Yesterday", f"R$ {y_r:,}", f"${y_u:,.2f}")
     col3.metric("Last 28 Days", f"R$ {l_r:,}", f"${l_u:,.2f}")
     col4.metric("All Time", f"R$ {a_r:,}", f"${a_u:,.2f}")
+
+    # ====================== DAILY GRAPH ======================
+    st.divider()
+    st.subheader("📈 Daily Sales Trend")
+
+    df['Date Only'] = df[date_col].dt.date
+
+    daily_sales = (
+        df.groupby('Date Only')['Her Robux']
+        .sum()
+        .reset_index()
+        .sort_values('Date Only')
+    )
+
+    daily_sales['Her USD'] = daily_sales['Her Robux'] * DEVEX_RATE
+
+    metric_choice = st.radio("View:", ["Robux", "USD"], horizontal=True)
+
+    y_axis = 'Her Robux' if metric_choice == "Robux" else 'Her USD'
+
+    chart = alt.Chart(daily_sales).mark_line(
+        interpolate='monotone',
+        point=True
+    ).encode(
+        x=alt.X('Date Only:T', title="Date"),
+        y=alt.Y(y_axis + ':Q', title=metric_choice),
+        tooltip=['Date Only', y_axis]
+    ).properties(height=400)
+
+    st.altair_chart(chart, use_container_width=True)
 
     # ====================== BEST SELLERS ======================
     st.divider()
