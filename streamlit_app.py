@@ -23,7 +23,6 @@ uploaded_files = st.file_uploader(
 # ====================== RULES ======================
 SPECIAL_CAPE_GROUP = 32600641
 
-# Only these Asset IDs in the Cape group are counted (50%)
 ALLOWED_CAPE_ASSET_IDS = {
     82121186934297, 109090921647450, 126346507087936,
     14426328438, 14426332963, 14426354335,
@@ -33,7 +32,7 @@ ALLOWED_CAPE_ASSET_IDS = {
     14434890711, 14434904829
 }
 
-FIFTY_PERCENT_GROUPS = {823805908}   # FACIN - 50% on everything
+FIFTY_PERCENT_GROUPS = {823805908}      # FACIN - 50% on everything
 FULL_REVENUE_GROUPS = {13860593, 33024439, 35387713}  # Trippy Fashion, 3D, Hair
 
 # --- DATA LOADER ---
@@ -51,42 +50,37 @@ if uploaded_files:
         df = load_data(uploaded_files)
 
         # Column detection
-        date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
+        date_col = next((c for c in ['Date and Time', 'Created', 'Date', 'Sale Date and Time'] if c in df.columns), None)
         rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
         asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId', 'AssetID'] if c in df.columns), None)
 
-        # Improved Group ID detection
-        group_col = next((c for c in ['Group Id', 'Group ID', 'GroupId', 'group_id', 'Group'] 
+        # Improved Group column detection (Roblox uses several variations)
+        group_col = next((c for c in ['Group Id', 'Group ID', 'GroupId', 'group id', 'Group', 'Owner ID'] 
                          if c in df.columns), None)
 
         if not date_col or not rev_col:
             st.error(f"Missing required columns. Found: {list(df.columns)}")
             st.stop()
 
-        # Clean Revenue
-        df[rev_col] = pd.to_numeric(
-            df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True),
-            errors='coerce'
-        )
+        # Clean data
+        df[rev_col] = pd.to_numeric(df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True), errors='coerce')
         df = df.dropna(subset=[rev_col])
 
-        # Clean Asset Id
         if asset_col:
             df[asset_col] = pd.to_numeric(df[asset_col], errors='coerce')
 
-        # Datetime
         df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
         df = df.dropna(subset=[date_col])
 
         now = pd.Timestamp.now("UTC")
 
-        # ====================== HER SHARE CALCULATION (Fixed) ======================
+        # ====================== HER SHARE CALCULATION ======================
         def get_her_share(row):
-            # Get group safely
-            if group_col and group_col in row:
+            # Get group
+            if group_col and pd.notna(row.get(group_col)):
                 try:
                     group = int(row[group_col])
-                except (ValueError, TypeError):
+                except:
                     group = 0
             else:
                 group = 0
@@ -95,29 +89,39 @@ if uploaded_files:
             asset_id = row.get(asset_col) if asset_col else None
 
             if group == SPECIAL_CAPE_GROUP:
-                # Only specific capes get 50%, everything else in this group = 0
                 if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
                     return revenue * 0.5
                 else:
-                    return 0  # Ignore other capes in the special group
+                    return 0.0   # Ignore all other capes
 
             elif group in FIFTY_PERCENT_GROUPS:
                 return revenue * 0.5
 
             else:
-                # 100% for Trippy groups and any other groups she fully owns
-                return revenue
+                return revenue  # 100% for Trippy groups and others
 
-        df['Her Robux'] = df.apply(get_her_share, axis=1)
+        df['Her Robux'] = df.apply(get_her_share, axis=1).round(0)
         df['Her USD'] = df['Her Robux'] * devex_rate
 
-        # ====================== DEBUG INFO ======================
+        # ====================== DEBUG & INFO ======================
         st.sidebar.subheader("Debug Info")
-        st.sidebar.write(f"**Group Column Detected:** {group_col}")
+        st.sidebar.write(f"**Group Column Detected:** `{group_col}`")
         if group_col:
-            unique_groups = df[group_col].dropna().unique()
-            st.sidebar.write(f"Unique Groups Found: {len(unique_groups)}")
-            st.sidebar.write(unique_groups[:10])  # Show first 10
+            st.sidebar.write(f"Unique Groups: {sorted(df[group_col].dropna().unique()[:15])}")
+        else:
+            st.sidebar.warning("⚠️ No Group column detected! All sales treated as 100% hers.")
+
+        # Show info about Special Cape Group
+        if group_col and SPECIAL_CAPE_GROUP in df[group_col].values:
+            cape_df = df[df[group_col] == SPECIAL_CAPE_GROUP].copy()
+            st.subheader("🧥 Capes in Special Group (32600641)")
+            st.write("Only the 18 allowed Asset IDs below should show Her Robux > 0. Everything else should be 0.")
+            
+            summary = cape_df.groupby(asset_col if asset_col else 'Asset Id').agg({
+                'Asset Name': 'first',
+                'Her Robux': 'sum'
+            }).sort_values('Her Robux', ascending=False)
+            st.dataframe(summary.style.format({"Her Robux": "{:,.0f}"}))
 
         # ====================== DATE FILTER ======================
         st.sidebar.subheader("Date Filter")
@@ -138,7 +142,6 @@ if uploaded_files:
         col1.metric("Total Her Robux", f"R$ {total_her_robux:,}")
         col2.metric("Estimated DevEx (Her Share)", f"${total_her_usd:,.2f}")
 
-        # Period metrics
         cols = st.columns(4)
         periods = [
             ("Today", df[df[date_col].dt.date == now.date()]),
@@ -146,7 +149,6 @@ if uploaded_files:
             ("31 Days", df[df[date_col] >= (now - timedelta(days=31))]),
             ("All Time", df)
         ]
-
         for col, (label, data) in zip(cols, periods):
             robux = int(data['Her Robux'].sum())
             usd = robux * devex_rate
@@ -158,17 +160,13 @@ if uploaded_files:
         daily = df.groupby(df[date_col].dt.date)['Her Robux'].sum()
         st.bar_chart(daily)
 
-        # Top Assets (Her Share)
         st.divider()
         st.subheader("🏆 Top Assets - Her Share")
         if asset_col and 'Asset Name' in df.columns:
-            top = df.groupby(['Asset Name', asset_col]).agg({
-                'Her Robux': 'sum'
-            }).sort_values('Her Robux', ascending=False)
+            top = df.groupby(['Asset Name', asset_col]).agg({'Her Robux': 'sum'}).sort_values('Her Robux', ascending=False)
             top['Her USD'] = top['Her Robux'] * devex_rate
             st.dataframe(top.head(20).style.format({"Her Robux": "{:,.0f}", "Her USD": "${:,.2f}"}))
 
-        # Download
         st.download_button(
             "📥 Download Data with Her Share",
             df.to_csv(index=False),
