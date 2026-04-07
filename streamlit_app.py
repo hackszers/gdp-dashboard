@@ -5,21 +5,9 @@ import pandas as pd
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
 st.title("📊 Roblox Sales Dashboard - Her Revenue After Split")
 
-# --- Sidebar ---
-st.sidebar.subheader("DevEx Settings")
-devex_rate = st.sidebar.number_input(
-    "Exchange Rate (USD per 1 R$)",
-    value=0.0038,
-    format="%.4f"
-)
+# ====================== CONSTANTS ======================
+DEVEX_RATE = 0.0038
 
-uploaded_files = st.file_uploader(
-    "Upload Sales CSVs (multiple allowed)",
-    type=["csv"],
-    accept_multiple_files=True
-)
-
-# ====================== RULES ======================
 SPECIAL_CAPE_GROUP = 32600641
 
 ALLOWED_CAPE_ASSET_IDS = {
@@ -34,7 +22,14 @@ ALLOWED_CAPE_ASSET_IDS = {
 FIFTY_PERCENT_GROUPS = {823805908}
 FULL_REVENUE_GROUPS = {13860593, 33024439, 35387713}
 
-# ====================== DATA LOADER ======================
+# ====================== FILE UPLOAD ======================
+uploaded_files = st.file_uploader(
+    "Upload Sales CSVs",
+    type=["csv"],
+    accept_multiple_files=True
+)
+
+# ====================== LOAD DATA ======================
 @st.cache_data
 def load_data(files):
     df_list = []
@@ -43,11 +38,9 @@ def load_data(files):
         temp_df = pd.read_csv(file)
         temp_df.columns = [c.strip() for c in temp_df.columns]
 
-        # --- Ensure Group Id exists ---
         if 'Group Id' not in temp_df.columns:
             temp_df['Group Id'] = 0
 
-        # --- Detect group from filename ---
         if hasattr(file, 'name'):
             name = file.name
 
@@ -68,126 +61,109 @@ def load_data(files):
 
 # ====================== MAIN ======================
 if uploaded_files:
-    try:
-        df = load_data(uploaded_files)
+    df = load_data(uploaded_files)
 
-        # --- Column Detection ---
-        date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
-        rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
-        asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId', 'AssetID'] if c in df.columns), None)
-        name_col = next((c for c in ['Asset Name', 'Name'] if c in df.columns), None)
+    # --- Detect Columns ---
+    date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
+    rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
+    asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId'] if c in df.columns), None)
+    name_col = next((c for c in ['Asset Name', 'Name'] if c in df.columns), None)
 
-        if not date_col or not rev_col:
-            st.error(f"Missing required columns. Found: {list(df.columns)}")
-            st.stop()
+    if not date_col or not rev_col:
+        st.error("Missing required columns")
+        st.stop()
 
-        # --- Clean Data ---
-        df[rev_col] = pd.to_numeric(
-            df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True),
-            errors='coerce'
-        )
-        df = df.dropna(subset=[rev_col])
+    # --- Clean Data ---
+    df[rev_col] = pd.to_numeric(
+        df[rev_col].astype(str).str.replace(r"[^\d.-]", "", regex=True),
+        errors='coerce'
+    )
+    df = df.dropna(subset=[rev_col])
 
-        if asset_col:
-            df[asset_col] = pd.to_numeric(df[asset_col], errors='coerce')
+    if asset_col:
+        df[asset_col] = pd.to_numeric(df[asset_col], errors='coerce')
 
-        df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
-        df = df.dropna(subset=[date_col])
+    df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
+    df = df.dropna(subset=[date_col])
 
-        # ====================== HER SHARE CALC ======================
-        def get_her_share(row):
-            revenue = row[rev_col]
-            group = int(row.get('Group Id', 0))
-            asset_id = row.get(asset_col)
+    now = pd.Timestamp.now("UTC")
 
-            # --- Cape Group Logic ---
-            if group == SPECIAL_CAPE_GROUP:
-                if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
-                    return revenue * 0.5
-                return 0.0
+    # ====================== SHARE LOGIC ======================
+    def get_her_share(row):
+        revenue = row[rev_col]
+        group = int(row.get('Group Id', 0))
+        asset_id = row.get(asset_col)
 
-            # --- Asset-based fallback (if group missing but ID matches) ---
+        if group == SPECIAL_CAPE_GROUP:
             if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
                 return revenue * 0.5
+            return 0
 
-            # --- Other Groups ---
-            if group in FIFTY_PERCENT_GROUPS:
-                return revenue * 0.5
+        if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS:
+            return revenue * 0.5
 
-            if group in FULL_REVENUE_GROUPS:
-                return revenue
+        if group in FIFTY_PERCENT_GROUPS:
+            return revenue * 0.5
 
-            # --- Default fallback ---
-            return revenue
+        return revenue
 
-        df['Her Robux'] = df.apply(get_her_share, axis=1).round(0)
-        df['Her USD'] = df['Her Robux'] * devex_rate
+    df['Her Robux'] = df.apply(get_her_share, axis=1)
+    df['Her USD'] = df['Her Robux'] * DEVEX_RATE
 
-        # ====================== DEBUG ======================
-        st.sidebar.subheader("Debug Info")
-        st.sidebar.write(f"**Files Uploaded:** {len(uploaded_files)}")
-        st.sidebar.write(f"**Total Rows:** {len(df)}")
+    # ====================== TIME FILTERS ======================
+    today = now.normalize()
+    yesterday = today - pd.Timedelta(days=1)
+    last_28 = today - pd.Timedelta(days=28)
 
-        if 'Group Id' in df.columns:
-            st.sidebar.write("**Group Breakdown:**")
-            st.sidebar.write(df['Group Id'].value_counts())
+    df_today = df[df[date_col] >= today]
+    df_yesterday = df[(df[date_col] >= yesterday) & (df[date_col] < today)]
+    df_28 = df[df[date_col] >= last_28]
 
-        # --- Cape stats ---
-        if asset_col:
-            allowed_mask = df[asset_col].isin(ALLOWED_CAPE_ASSET_IDS)
-            ignored_mask = df[asset_col].notna() & ~allowed_mask
+    # ====================== KPI FUNCTION ======================
+    def calc(df_slice):
+        robux = int(df_slice['Her Robux'].sum())
+        usd = robux * DEVEX_RATE
+        return robux, usd
 
-            st.subheader(f"✅ Allowed Capes (50% Share): {allowed_mask.sum():,} sales")
-            st.subheader(f"❌ Ignored Capes (0% Share): {ignored_mask.sum():,} sales")
+    t_r, t_u = calc(df_today)
+    y_r, y_u = calc(df_yesterday)
+    l_r, l_u = calc(df_28)
+    a_r, a_u = calc(df)
 
-        # ====================== DATE FILTER ======================
-        st.sidebar.subheader("Date Filter")
+    # ====================== KPI DISPLAY ======================
+    st.subheader("📅 Revenue Breakdown")
 
-        min_date = df[date_col].min().date()
-        max_date = df[date_col].max().date()
+    col1, col2, col3, col4 = st.columns(4)
 
-        date_range = st.sidebar.date_input("Select Date Range", [min_date, max_date])
+    col1.metric("Today", f"R$ {t_r:,}", f"${t_u:,.2f}")
+    col2.metric("Yesterday", f"R$ {y_r:,}", f"${y_u:,.2f}")
+    col3.metric("Last 28 Days", f"R$ {l_r:,}", f"${l_u:,.2f}")
+    col4.metric("All Time", f"R$ {a_r:,}", f"${a_u:,.2f}")
 
-        if len(date_range) == 2:
-            start_date, end_date = date_range
-            df = df[
-                (df[date_col].dt.date >= start_date) &
-                (df[date_col].dt.date <= end_date)
-            ]
+    # ====================== BEST SELLERS ======================
+    st.divider()
+    st.subheader("🏆 Best Selling Items (Her Revenue)")
 
-        # ====================== METRICS ======================
-        st.subheader("💰 Her Revenue Summary (After Split)")
-
-        total_her_robux = int(df['Her Robux'].sum())
-        total_her_usd = total_her_robux * devex_rate
-
-        col1, col2 = st.columns(2)
-        col1.metric("Total Her Robux", f"R$ {total_her_robux:,}")
-        col2.metric("Estimated DevEx (Her Share)", f"${total_her_usd:,.2f}")
-
-        # ====================== TOP ASSETS ======================
-        st.divider()
-        st.subheader("🏆 Top Assets - Her Share")
-
-        if name_col and asset_col:
-            top = df.groupby([name_col, asset_col])['Her Robux'].sum().reset_index()
-            top = top.sort_values('Her Robux', ascending=False)
-            top['Her USD'] = top['Her Robux'] * devex_rate
-
-            st.dataframe(
-                top.head(30).style.format({
-                    "Her Robux": "{:,.0f}",
-                    "Her USD": "${:,.2f}"
-                })
-            )
-
-        # ====================== DOWNLOAD ======================
-        st.download_button(
-            "📥 Download Data with Her Share",
-            df.to_csv(index=False),
-            file_name="her_revenue_split.csv"
+    if name_col and asset_col:
+        top = (
+            df.groupby([name_col, asset_col])['Her Robux']
+            .sum()
+            .reset_index()
+            .sort_values('Her Robux', ascending=False)
         )
 
-    except Exception as e:
-        st.error("App crashed")
-        st.exception(e)
+        top['Her USD'] = top['Her Robux'] * DEVEX_RATE
+
+        st.dataframe(
+            top.head(25).style.format({
+                "Her Robux": "{:,.0f}",
+                "Her USD": "${:,.2f}"
+            })
+        )
+
+    # ====================== DOWNLOAD ======================
+    st.download_button(
+        "📥 Download Full Data",
+        df.to_csv(index=False),
+        file_name="roblox_revenue.csv"
+    )
