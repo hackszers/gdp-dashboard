@@ -58,11 +58,32 @@ def load_data(files):
 
         df_list.append(temp_df)
 
-    return pd.concat(df_list, ignore_index=True)
+    df = pd.concat(df_list, ignore_index=True)
+
+    # ====================== DEDUPLICATION FIX ======================
+    date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
+    rev_col = next((c for c in ['Revenue', 'Net Revenue', 'Amount', 'Robux Earned'] if c in df.columns), None)
+    asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId'] if c in df.columns), None)
+    name_col = next((c for c in ['Asset Name', 'Name'] if c in df.columns), None)
+
+    dedupe_cols = [col for col in [date_col, rev_col, asset_col, name_col, 'Group Id'] if col]
+
+    duplicates_removed = 0
+
+    if dedupe_cols:
+        before = len(df)
+        df = df.drop_duplicates(subset=dedupe_cols, keep='first')
+        after = len(df)
+        duplicates_removed = before - after
+
+    return df, duplicates_removed
 
 # ====================== MAIN ======================
 if uploaded_files:
-    df = load_data(uploaded_files)
+    df, duplicates_removed = load_data(uploaded_files)
+
+    if duplicates_removed > 0:
+        st.warning(f"⚠️ Removed {duplicates_removed:,} duplicate rows")
 
     # --- Detect Columns ---
     date_col = next((c for c in ['Date and Time', 'Created', 'Date'] if c in df.columns), None)
