@@ -135,10 +135,12 @@ if uploaded_files:
     # ====================== GLOBAL KPIs ======================
     today = now.normalize()
     yesterday = today - pd.Timedelta(days=1)
+    last_7 = today - pd.Timedelta(days=7)
     last_28 = today - pd.Timedelta(days=28)
 
     df_today = df[df[date_col] >= today]
     df_yesterday = df[(df[date_col] >= yesterday) & (df[date_col] < today)]
+    df_7 = df[df[date_col] >= last_7]
     df_28 = df[df[date_col] >= last_28]
 
     def calc(df_slice):
@@ -148,16 +150,18 @@ if uploaded_files:
 
     t_r, t_u = calc(df_today)
     y_r, y_u = calc(df_yesterday)
+    s_r, s_u = calc(df_7)
     l_r, l_u = calc(df_28)
     a_r, a_u = calc(df)
 
     st.subheader("📅 Revenue Breakdown")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Today", f"R$ {t_r:,}", f"${t_u:,.2f}")
     col2.metric("Yesterday", f"R$ {y_r:,}", f"${y_u:,.2f}")
-    col3.metric("Last 28 Days", f"R$ {l_r:,}", f"${l_u:,.2f}")
-    col4.metric("All Time", f"R$ {a_r:,}", f"${a_u:,.2f}")
+    col3.metric("Last 7 Days", f"R$ {s_r:,}", f"${s_u:,.2f}")
+    col4.metric("Last 28 Days", f"R$ {l_r:,}", f"${l_u:,.2f}")
+    col5.metric("All Time", f"R$ {a_r:,}", f"${a_u:,.2f}")
 
     # ====================== DATE RANGE FILTER ======================
     st.divider()
@@ -235,7 +239,8 @@ if uploaded_files:
             top.head(25).style.format({
                 "Her Robux": "{:,.0f}",
                 "Her USD": "${:,.2f}"
-            })
+            }),
+            use_container_width=True
         )
 
     # ====================== DOWNLOAD ======================
