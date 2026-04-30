@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+import numpy as np
 
 # --- Page Config ---
 st.set_page_config(page_title="Roblox Analytics", layout="wide", page_icon="📊")
@@ -8,7 +9,6 @@ st.title("📊 Roblox Sales Dashboard - Gross vs. Her Revenue")
 
 # ====================== CONSTANTS ======================
 DEVEX_RATE = 0.0038
-
 SPECIAL_CAPE_GROUP = 32600641
 
 ALLOWED_CAPE_ASSET_IDS = {
@@ -42,16 +42,18 @@ def load_data(files):
         if 'Group Id' not in temp_df.columns:
             temp_df['Group Id'] = 0
 
-        if hasattr(file, 'name'):
-            name = file.name
-            if '32600641' in name: temp_df['Group Id'] = 32600641
-            elif '823805908' in name: temp_df['Group Id'] = 823805908
-            elif '13860593' in name: temp_df['Group Id'] = 13860593
-            elif '33024439' in name: temp_df['Group Id'] = 33024439
-            elif '35387713' in name: temp_df['Group Id'] = 35387713
+        # Filename Detection Logic
+        name = file.name
+        if '32600641' in name: temp_df['Group Id'] = 32600641
+        elif '823805908' in name: temp_df['Group Id'] = 823805908
+        elif '13860593' in name: temp_df['Group Id'] = 13860593
+        elif '33024439' in name: temp_df['Group Id'] = 33024439
+        elif '35387713' in name: temp_df['Group Id'] = 35387713
 
         df_list.append(temp_df)
 
+    if not df_list: return None, 0, None, None, None, None
+    
     df = pd.concat(df_list, ignore_index=True)
 
     # Detect Columns
@@ -60,14 +62,11 @@ def load_data(files):
     asset_col = next((c for c in ['Asset Id', 'Asset ID', 'AssetId'] if c in df.columns), None)
     name_col = next((c for c in ['Asset Name', 'Name'] if c in df.columns), None)
 
+    # Deduplication
     dedupe_cols = [col for col in [date_col, rev_col, asset_col, name_col, 'Group Id'] if col]
-    
-    duplicates_removed = 0
-    if dedupe_cols:
-        before = len(df)
-        df = df.drop_duplicates(subset=dedupe_cols, keep='first')
-        after = len(df)
-        duplicates_removed = before - after
+    before = len(df)
+    df = df.drop_duplicates(subset=dedupe_cols, keep='first')
+    duplicates_removed = before - len(df)
 
     return df, duplicates_removed, date_col, rev_col, asset_col, name_col
 
@@ -79,7 +78,7 @@ if uploaded_files:
         st.warning(f"⚠️ Removed {duplicates_removed:,} duplicate rows")
 
     if not date_col or not rev_col:
-        st.error("Missing required columns")
+        st.error("Missing required columns (Date or Revenue)")
         st.stop()
 
     # --- Clean Data ---
@@ -87,23 +86,23 @@ if uploaded_files:
     df[date_col] = pd.to_datetime(df[date_col], utc=True, errors='coerce')
     df = df.dropna(subset=[rev_col, date_col])
 
-    # --- Split Logic ---
-    def get_her_share(row):
-        revenue = row[rev_col]
-        group = int(row.get('Group Id', 0))
-        asset_id = row.get(asset_col)
-
-        if group == SPECIAL_CAPE_GROUP:
-            return revenue * 0.5 if pd.notna(asset_id) and int(asset_id) in ALLOWED_CAPE_ASSET_IDS else 0
-        if group in FIFTY_PERCENT_GROUPS:
-            return revenue * 0.5
-        return revenue
-
-    df['Her Robux'] = df.apply(get_her_share, axis=1)
-    now = pd.Timestamp.now("UTC")
+    # --- Optimized Revenue Logic ---
+    df['Her Robux'] = 0.0
+    
+    # 1. Full Revenue Groups
+    df.loc[df['Group Id'].isin(FULL_REVENUE_GROUPS), 'Her Robux'] = df[rev_col]
+    
+    # 2. 50% Groups
+    df.loc[df['Group Id'].isin(FIFTY_PERCENT_GROUPS), 'Her Robux'] = df[rev_col] * 0.5
+    
+    # 3. Special Cape Group (The Filter Fix)
+    cape_mask = (df['Group Id'] == SPECIAL_CAPE_GROUP) & (df[asset_col].astype(float).isin(ALLOWED_CAPE_ASSET_IDS))
+    df.loc[cape_mask, 'Her Robux'] = df[rev_col] * 0.5
 
     # ====================== KPI SECTION ======================
     st.subheader("📅 Revenue Breakdown")
+    now = pd.Timestamp.now("UTC")
+    today = now.normalize()
 
     def calc_stats(df_slice):
         gross = int(df_slice[rev_col].sum())
@@ -111,7 +110,6 @@ if uploaded_files:
         usd = hers * DEVEX_RATE
         return gross, hers, usd
 
-    today = now.normalize()
     periods = {
         "Today": df[df[date_col] >= today],
         "Yesterday": df[(df[date_col] >= today - pd.Timedelta(days=1)) & (df[date_col] < today)],
@@ -139,8 +137,10 @@ if uploaded_files:
         days = {"Last 7 days": 7, "Last 28 days": 28, "Last 90 days": 90}[preset]
         start_date, end_date = (now - pd.Timedelta(days=days)).date(), now.date()
 
-    mask = (df[date_col] >= pd.Timestamp(start_date).tz_localize("UTC")) & (df[date_col] <= pd.Timestamp(end_date).tz_localize("UTC") + pd.Timedelta(days=1))
-    filtered_df = df[mask]
+    # Filter by Date
+    mask = (df[date_col] >= pd.Timestamp(start_date).tz_localize("UTC")) & \
+           (df[date_col] <= pd.Timestamp(end_date).tz_localize("UTC") + pd.Timedelta(days=1))
+    filtered_df = df[mask].copy()
 
     # ====================== CHARTS ======================
     st.subheader("📈 Daily Trends (Gross vs. Her Share)")
@@ -148,7 +148,6 @@ if uploaded_files:
     daily = filtered_df.groupby('Date Only').agg({rev_col: 'sum', 'Her Robux': 'sum'}).reset_index()
     daily.columns = ['Date', 'Gross Robux', 'Her Robux']
 
-    # Chart Logic
     chart_data = daily.melt('Date', var_name='Type', value_name='Robux')
     line_chart = alt.Chart(chart_data).mark_line(point=True).encode(
         x='Date:T',
@@ -158,12 +157,26 @@ if uploaded_files:
     ).properties(height=400)
     st.altair_chart(line_chart, use_container_width=True)
 
-    # ====================== BEST SELLERS ======================
+    # ====================== BEST SELLERS (CLEANED) ======================
     if name_col and asset_col:
-        st.subheader("🏆 Top Items (By Her Revenue)")
+        st.subheader("🏆 Top Items (Whitelisted Only)")
+        
+        # Aggregate
         top = filtered_df.groupby([name_col, asset_col]).agg({rev_col: 'sum', 'Her Robux': 'sum'}).reset_index()
-        top = top.sort_values('Her Robux', ascending=False).head(20)
-        st.dataframe(top.style.format({rev_col: "{:,.0f}", "Her Robux": "{:,.0f}"}), use_container_width=True)
+        
+        # FIX: Remove any items that have 0 Her Robux (hides non-whitelisted capes)
+        top = top[top['Her Robux'] > 0]
+        
+        top = top.sort_values('Her Robux', ascending=False).head(25)
+        
+        if not top.empty:
+            st.dataframe(
+                top.style.format({rev_col: "{:,.0f}", "Her Robux": "{:,.0f}"}), 
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No sales found for whitelisted items in this period.")
 
     # ====================== DOWNLOAD ======================
     st.download_button("📥 Download Filtered CSV", filtered_df.to_csv(index=False), "roblox_split_data.csv")
